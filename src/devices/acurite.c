@@ -23,6 +23,7 @@
 #define ACURITE_TXR_BITLEN        56
 #define ACURITE_5N1_BITLEN        64
 #define ACURITE_6045_BITLEN        72
+#define ACURITE_ATLAS_BITLEN      80
 
 // ** Acurite known message types
 #define ACURITE_MSGTYPE_TOWER_SENSOR                    0x04
@@ -412,6 +413,7 @@ similar RF encoding and data format:
 - 592TXR temperature and humidity sensor
 - 5-n-1 weather station
 - 6045M Lightning Detector with Temperature and Humidity
+- Atlas
 
     CC RR IIII | IIII IIII | pBMMMMMM | pxxWWWWW | pWWWTTTT | pTTTTTTT | pSSSSSSS
     C:2d R:2d ID:12d 1x BATT:1b TYPE:6h 1x ?2b W:5b 1x 3b T:4b 1x 7b S: 1x 7d
@@ -446,8 +448,9 @@ static int acurite_txr_decode(r_device *decoder, bitbuffer_t *bitbuffer)
             fprintf(stderr, "%s: row %d bits %d, bytes %d \n", __func__, brow, bitbuffer->bits_per_row[brow], browlen);
 
         if ((bitbuffer->bits_per_row[brow] < ACURITE_TXR_BITLEN ||
-            bitbuffer->bits_per_row[brow] > ACURITE_5N1_BITLEN + 1) &&
-            bitbuffer->bits_per_row[brow] != ACURITE_6045_BITLEN) {
+                bitbuffer->bits_per_row[brow] > ACURITE_5N1_BITLEN + 1)
+                && bitbuffer->bits_per_row[brow] != ACURITE_6045_BITLEN
+                && bitbuffer->bits_per_row[brow] != ACURITE_ATLAS_BITLEN) {
             if (decoder->verbose > 1 && bitbuffer->bits_per_row[brow] > 16)
                 fprintf(stderr, "%s: skipping wrong len\n", __func__);
             continue;
@@ -660,6 +663,37 @@ static int acurite_txr_decode(r_device *decoder, bitbuffer_t *bitbuffer)
             valid += acurite_6045_decode(decoder, bb, browlen);
         }
 
+        else if (browlen == ACURITE_ATLAS_BITLEN / 8) {
+            // TODO: work in progress
+            bitrow_printf(bb, bitbuffer->bits_per_row[brow], "%s: Acurite Atlas raw msg: ", __func__);
+            channel = acurite_getChannel(bb[0]);
+            sprintf(channel_str, "%c", channel);
+
+            sensor_id = 0; // ?
+            // The sensor sends the same data three times, each of these have
+            // an indicator of which one of the three it is. This means the
+            // checksum and first byte will be different for each one.
+            // The bits 4,5 of byte 0 indicate which copy
+            //  xxxx 00 xx = first copy
+            //  xxxx 01 xx = second copy
+            //  xxxx 10 xx = third copy
+            sequence_num = (bb[0] & 0x0c) >> 2;
+            battery_low  = 0; // ?
+
+            /* clang-format off */
+            data = data_make(
+                    "model",            "",         DATA_STRING, "Acurite-Atlas",
+                    //"id",               NULL,       DATA_INT,    sensor_id,
+                    "channel",          NULL,       DATA_STRING, &channel_str,
+                    "sequence_num",     NULL,       DATA_INT,    sequence_num,
+                    //"battery_ok",       NULL,       DATA_INT,    !battery_low,
+                    //"message_type",     NULL,       DATA_INT,    message_type,
+                    NULL);
+            /* clang-format on */
+
+            decoder_output_data(decoder, data);
+            valid++;
+        }
     }
 
     return valid;
